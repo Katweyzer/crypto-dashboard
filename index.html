@@ -50,21 +50,19 @@ select { padding: 5px; font-size: 14px; margin-right: 15px; }
 <div class="signal" id="signalText">Загрузка данных...</div>
 
 <script>
-const corsProxy = "https://cors-anywhere.herokuapp.com/";
-
-// Binance Klines
+// Загрузка дневных свечей Binance
 async function loadBinanceData(symbol, start, end) {
-  const url = `${corsProxy}https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=1500`;
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=1500`;
   const res = await fetch(url);
   const data = await res.json();
   return data.map(k=>({ t:new Date(k[0]), c: parseFloat(k[4]) }))
              .filter(d=>d.t.getTime()/1000 >= start && d.t.getTime()/1000 <= end);
 }
 
-// Binance Futures Long/Short Ratio
+// Загрузка Long/Short Ratio (публичный endpoint)
 async function loadLongShort(symbol, start, end) {
   const pair = symbol.replace("USDT","");
-  const url = `${corsProxy}https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${pair}&period=1d&limit=1500`;
+  const url = `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${pair}&period=1d&limit=1500`;
   const res = await fetch(url);
   const data = await res.json();
   return data.map(d=>({ t: new Date(d.timestamp), r: parseFloat(d.longShortRatio) }))
@@ -111,11 +109,10 @@ function addAnnotations(labels, signals){
   return annotations;
 }
 
-// Добавляем точки входа/выхода на линии цены
 function addEntryPoints(prices, signals){
   return signals.map((s,i)=>{
-    if(s==="buy") return {x:i, y:prices[i]};
-    else if(s==="sell") return {x:i, y:prices[i]};
+    if(s==="buy") return {x:i, y:prices[i], signal:'buy'};
+    else if(s==="sell") return {x:i, y:prices[i], signal:'sell'};
     else return null;
   }).filter(p=>p!==null);
 }
@@ -140,17 +137,13 @@ async function updateChart() {
   cryptoChart.data.labels = labels;
   cryptoChart.data.datasets[0].data = prices;
   cryptoChart.data.datasets[1].data = ratios;
-  
-  // Обновляем аннотации зон
   cryptoChart.options.plugins.annotation.annotations = addAnnotations(labels, signals);
 
-  // Обновляем точки входа/выхода
   const entryPoints = addEntryPoints(prices, signals);
-  cryptoChart.data.datasets[2].data = entryPoints.map(p=>({x:p.x, y:p.y}));
-  
+  cryptoChart.data.datasets[2].data = entryPoints.map(p=>({x:p.x, y:p.y, signal:p.signal}));
+
   cryptoChart.update();
 
-  // Сигнал последней свечи
   const lastSignal = signals[signals.length-1];
   const signalDiv = document.getElementById("signalText");
   if(lastSignal==="buy") signalDiv.innerHTML=`Сигнал: <span style='color:green'>Покупать</span>`;
@@ -158,15 +151,14 @@ async function updateChart() {
   else signalDiv.innerHTML=`Сигнал: <span style='color:gray'>Нейтрально</span>`;
 }
 
-// Создаем график с третьим dataset для точек входа/выхода
 const ctx=document.getElementById("cryptoChart").getContext("2d");
 const cryptoChart=new Chart(ctx,{
   type:'line',
   data:{labels:[], datasets:[
     {label:"Цена (USD)", data:[], borderColor:'orange', fill:false, yAxisID:'yPrice'},
     {label:"Long/Short Ratio", data:[], borderColor:'blue', fill:false, yAxisID:'yRatio'},
-    {label:"Точки входа/выхода", data:[], borderColor:'green', pointBackgroundColor: function(ctx){
-      return ctx.raw.y && ctx.raw.signal==='buy' ? 'green' : 'red';
+    {label:"Точки входа/выхода", data:[], borderColor:'green', pointBackgroundColor:function(ctx){
+      return ctx.raw.signal==='buy'?'green':'red';
     }, showLine:false, pointRadius:5, type:'scatter', yAxisID:'yPrice'}
   ]},
   options:{
