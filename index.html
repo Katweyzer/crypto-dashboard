@@ -1,19 +1,19 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <title>Crypto Dashboard Binance</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    #controls { margin-bottom: 15px; }
-    select { padding: 5px; font-size: 14px; margin-right: 15px; }
-    #chartContainer { width: 100%; max-width: 1200px; margin: auto; }
-  </style>
+<meta charset="UTF-8">
+<title>Crypto Dashboard Binance + SMA</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; }
+  #controls { margin-bottom: 15px; }
+  select { padding: 5px; font-size: 14px; margin-right: 15px; }
+  #chartContainer { width: 100%; max-width: 1200px; margin: auto; }
+</style>
 </head>
 <body>
 
-<h1>Crypto Price History (Binance)</h1>
+<h1>Crypto Price + Volume + SMA (Binance)</h1>
 
 <div id="controls">
   <label>Токен: </label>
@@ -31,15 +31,14 @@
 </div>
 
 <script>
-// CORS-прокси нужен только если открываешь напрямую в браузере
+// CORS-прокси для работы в браузере
 const corsProxy = "https://cors-anywhere.herokuapp.com/";
 
-// Загрузка свечей Binance (публичный endpoint)
+// Загрузка дневных свечей Binance
 async function loadBinanceData(symbol) {
   const url = `${corsProxy}https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=1500`;
   const res = await fetch(url);
   const data = await res.json();
-  // преобразуем в {t, o, h, l, c, v}
   return data.map(k => ({
     t: new Date(k[0]),
     o: parseFloat(k[1]),
@@ -50,39 +49,60 @@ async function loadBinanceData(symbol) {
   }));
 }
 
+// Расчет SMA
+function calculateSMA(values, period) {
+  const sma = [];
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) {
+      sma.push(null);
+    } else {
+      const sum = values.slice(i - period + 1, i + 1).reduce((a,b)=>a+b,0);
+      sma.push(sum / period);
+    }
+  }
+  return sma;
+}
+
 // Обновление графика
 async function updateChart() {
   const symbol = document.getElementById("tokenSelect").value;
   const candles = await loadBinanceData(symbol);
 
   const labels = candles.map(c => c.t.toISOString().split('T')[0]);
-  const prices = candles.map(c => c.c);
+  const closePrices = candles.map(c => c.c);
+  const volumes = candles.map(c => c.v);
+
+  const sma20 = calculateSMA(closePrices, 20);
+  const sma50 = calculateSMA(closePrices, 50);
 
   cryptoChart.data.labels = labels;
-  cryptoChart.data.datasets[0].data = prices;
+  cryptoChart.data.datasets[0].data = closePrices;
+  cryptoChart.data.datasets[1].data = volumes;
+  cryptoChart.data.datasets[2].data = sma20;
+  cryptoChart.data.datasets[3].data = sma50;
   cryptoChart.update();
 }
 
-// Создание графика
+// Создаем график
 const ctx = document.getElementById("cryptoChart").getContext("2d");
 const cryptoChart = new Chart(ctx, {
   type: 'line',
   data: {
     labels: [],
-    datasets: [{
-      label: "Цена закрытия (USD)",
-      data: [],
-      borderColor: 'orange',
-      fill: false,
-      tension: 0.1
-    }]
+    datasets: [
+      { label: "Цена закрытия (USD)", data: [], borderColor: 'orange', fill: false, tension: 0.1, yAxisID: 'y1' },
+      { label: "Объем", data: [], borderColor: 'gray', fill: true, backgroundColor:'rgba(128,128,128,0.2)', yAxisID: 'y2' },
+      { label: "SMA 20", data: [], borderColor: 'blue', fill: false, tension: 0.1, yAxisID: 'y1' },
+      { label: "SMA 50", data: [], borderColor: 'red', fill: false, tension: 0.1, yAxisID: 'y1' }
+    ]
   },
   options: {
     responsive: true,
     interaction: { mode: 'index', intersect: false },
     scales: {
-      y: { title: { display: true, text: 'Цена (USD)' } },
-      x: { title: { display: true, text: 'Дата' } }
+      y1: { type:'linear', position:'left', title:{display:true,text:'Цена (USD)'} },
+      y2: { type:'linear', position:'right', title:{display:true,text:'Объем'}, grid:{drawOnChartArea:false} },
+      x: { title: { display:true, text:'Дата' } }
     }
   }
 });
@@ -92,6 +112,7 @@ document.getElementById("tokenSelect").addEventListener("change", updateChart);
 
 // Первый запуск
 updateChart();
+
 </script>
 </body>
 </html>
