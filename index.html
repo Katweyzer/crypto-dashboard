@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>Crypto Dashboard CMC + Entry Points (L/S Imitaion)</title>
+<title>Crypto Dashboard CMC + Coinalyze L/S</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.3.1/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
@@ -15,7 +15,7 @@ select { padding: 5px; font-size: 14px; margin-right: 15px; }
 </head>
 <body>
 
-<h1>Crypto Price + Entry Points (CMC L/S Simulation)</h1>
+<h1>Crypto Price + Long/Short Ratio (CMC + Coinalyze)</h1>
 
 <div id="controls">
   <label>Год: </label>
@@ -35,11 +35,11 @@ select { padding: 5px; font-size: 14px; margin-right: 15px; }
 
   <label>Токен: </label>
   <select id="tokenSelect">
-    <option value="1">BTC</option>
-    <option value="1027">ETH</option>
-    <option value="3794">ATOM</option>
-    <option value="2666">UNION</option>
-    <option value="1297">TIA</option>
+    <option value="BTCUSDT">BTC</option>
+    <option value="ETHUSDT">ETH</option>
+    <option value="ATOMUSDT">ATOM</option>
+    <option value="UNIONUSDT">UNION</option>
+    <option value="TIAUSDT">TIA</option>
   </select>
 </div>
 
@@ -50,65 +50,51 @@ select { padding: 5px; font-size: 14px; margin-right: 15px; }
 <div class="signal" id="signalText">Загрузка данных...</div>
 
 <script>
-const apiKey = "51da7c3d5e65400280a71b307a9f7ee2";
+const cmcApiKey = "51da7c3d5e65400280a71b307a9f7ee2";
+const coinalyzeApiKey = "3d998076-f9cd-481e-ada4-60891d1aff3a";
 
-// Получение диапазона дат
 function timestampYearRange(year){
   if(year==="all") return [new Date(2016,0,1), new Date()];
   const y=parseInt(year);
   return [new Date(y,0,1), new Date(y+1,0,1)];
 }
 
-// Получение исторических цен
-async function loadCMCData(id, year){
+// Получение цен CMC
+async function loadCMCData(symbol, year){
   const [startDate,endDate] = timestampYearRange(year);
   const start = Math.floor(startDate.getTime()/1000);
   const end = Math.floor(endDate.getTime()/1000);
+  
+  // Получаем ID CMC по символу (упрощение для примера)
+  const ids = {BTC:"1", ETH:"1027", ATOM:"3794", UNION:"2666", TIA:"1297"};
+  const id = ids[symbol.replace("USDT","")];
+
   const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical?id=${id}&convert=USD&time_start=${start}&time_end=${end}`;
-
-  const res = await fetch(url,{
-    headers: {"X-CMC_PRO_API_KEY": apiKey,"Accept":"application/json"}
-  });
+  const res = await fetch(url, {headers: {"X-CMC_PRO_API_KEY": cmcApiKey,"Accept":"application/json"}});
   const data = await res.json();
-  return data.data.quotes.map(q=>({
-    t:new Date(q.time_open),
-    c:q.quote.USD.close
-  }));
+  return data.data.quotes.map(q=>({ t:new Date(q.time_open), c:q.quote.USD.close }));
 }
 
-// SMA
-function calculateSMA(values, period){
-  const sma = [];
-  for(let i=0;i<values.length;i++){
-    if(i<period-1) sma.push(null);
-    else{
-      const sum = values.slice(i-period+1,i+1).reduce((a,b)=>a+b,0);
-      sma.push(sum/period);
-    }
-  }
-  return sma;
+// Получение L/S Ratio с Coinalyze
+async function loadLSData(symbol, year){
+  // Для Coinalyze берем период за последние 10 лет
+  const url = `https://api.coinalyze.net/v1/futures/longShort?symbol=${symbol}&apikey=${coinalyzeApiKey}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return data.map(d=>({ t:new Date(d.timestamp), r:d.longShortRatio }));
 }
 
-// Имитация L/S Ratio (0.5–1.5)
-function calculateLSRatio(prices){
-  const min = Math.min(...prices);
-  const max = Math.max(...prices);
-  return prices.map(p => 1 + ((p - min)/(max - min) - 0.5)); // 0.5–1.5
-}
-
-// Сигналы по L/S
-function getSignals(lsRatio){
-  return lsRatio.map(r => {
-    if(r<0.8) return 'buy';
-    else if(r>1.2) return 'sell';
+function getSignals(lsData){
+  return lsData.map(d=>{
+    if(d.r<0.8) return 'buy';
+    else if(d.r>1.2) return 'sell';
     else return 'neutral';
   });
 }
 
-// Цветные зоны
 function addAnnotations(labels, signals){
   const annotations = {};
-  let startIdx=null; let type=null;
+  let startIdx=null, type=null;
   labels.forEach((label,i)=>{
     if(signals[i]!==type){
       if(startIdx!==null){
@@ -128,7 +114,6 @@ function addAnnotations(labels, signals){
   return annotations;
 }
 
-// Точки входа/выхода
 function addEntryPoints(prices,signals){
   return signals.map((s,i)=>{
     if(s==='buy') return {x:i, y:prices[i], signal:'buy'};
@@ -137,22 +122,29 @@ function addEntryPoints(prices,signals){
   }).filter(p=>p!==null);
 }
 
-// Обновление графика
 async function updateChart(){
   const year = document.getElementById("yearSelect").value;
-  const id = document.getElementById("tokenSelect").value;
+  const symbol = document.getElementById("tokenSelect").value;
 
-  const data = await loadCMCData(id,year);
-  const labels = data.map(d=>d.t.toISOString().split('T')[0]);
-  const prices = data.map(d=>d.c);
+  const [priceData, lsData] = await Promise.all([
+    loadCMCData(symbol, year),
+    loadLSData(symbol, year)
+  ]);
 
-  const lsRatio = calculateLSRatio(prices);
-  const signals = getSignals(lsRatio);
+  const labels = priceData.map(d=>d.t.toISOString().split('T')[0]);
+  const prices = priceData.map(d=>d.c);
+
+  // Сопоставляем L/S с ценой
+  const lsMap = {};
+  lsData.forEach(d=>{ lsMap[d.t.toISOString().split('T')[0]]=d.r; });
+  const ratios = labels.map(l=>lsMap[l]||1); // default 1
+
+  const signals = getSignals(lsData);
   const entryPoints = addEntryPoints(prices,signals);
 
   cryptoChart.data.labels = labels;
   cryptoChart.data.datasets[0].data = prices;
-  cryptoChart.data.datasets[1].data = lsRatio;
+  cryptoChart.data.datasets[1].data = ratios;
   cryptoChart.data.datasets[2].data = entryPoints.map(p=>({x:p.x,y:p.y,signal:p.signal}));
   cryptoChart.options.plugins.annotation.annotations = addAnnotations(labels,signals);
   cryptoChart.update();
@@ -164,13 +156,12 @@ async function updateChart(){
   else signalDiv.innerHTML = "Сигнал: <span style='color:gray'>Нейтрально</span>";
 }
 
-// График
-const ctx=document.getElementById("cryptoChart").getContext("2d");
-const cryptoChart=new Chart(ctx,{
+const ctx = document.getElementById("cryptoChart").getContext("2d");
+const cryptoChart = new Chart(ctx,{
   type:'line',
   data:{labels:[], datasets:[
     {label:"Цена (USD)", data:[], borderColor:'orange', fill:false, yAxisID:'yPrice'},
-    {label:"L/S Ratio (Simulation)", data:[], borderColor:'blue', fill:false, yAxisID:'yRatio'},
+    {label:"L/S Ratio", data:[], borderColor:'blue', fill:false, yAxisID:'yRatio'},
     {label:"Точки входа/выхода", data:[], borderColor:'green', pointBackgroundColor:function(ctx){
       return ctx.raw.signal==='buy'?'green':'red';
     }, showLine:false, pointRadius:5, type:'scatter', yAxisID:'yPrice'}
@@ -189,7 +180,6 @@ const cryptoChart=new Chart(ctx,{
 
 document.getElementById("yearSelect").addEventListener("change",updateChart);
 document.getElementById("tokenSelect").addEventListener("change",updateChart);
-
 updateChart();
 </script>
 
