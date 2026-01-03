@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Crypto Price + Long/Short Ratio</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.3.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #controls { margin-bottom: 15px; }
+    select { padding: 5px; font-size: 14px; margin-right: 15px; }
+    #chartContainer { width: 100%; max-width: 1200px; margin: auto; }
+    .signal { font-weight: bold; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>Цена и Long/Short Ratio — Multi-Crypto</h1>
+
+  <div id="controls">
+    <label>Год: </label>
+    <select id="yearSelect">
+      <option value="all">Все годы</option>
+      <option value="2016">2016</option>
+      <option value="2017">2017</option>
+      <option value="2018">2018</option>
+      <option value="2019">2019</option>
+      <option value="2020">2020</option>
+      <option value="2021">2021</option>
+      <option value="2022">2022</option>
+      <option value="2023">2023</option>
+      <option value="2024">2024</option>
+      <option value="2025">2025</option>
+    </select>
+
+    <label>Токен: </label>
+    <select id="tokenSelect">
+      <option value="BTCUSDT_PERP.A">BTC</option>
+      <option value="ATOMUSDT_PERP.A">ATOM</option>
+      <option value="UNIONUSDT_PERP.A">UNION</option>
+      <option value="TIAUSDT_PERP.A">TIA</option>
+      <option value="ETHUSDT_PERP.A">ETH</option>
+    </select>
+  </div>
+
+  <div id="chartContainer">
+    <canvas id="cryptoChart"></canvas>
+  </div>
+
+  <div class="signal" id="signalText">Загрузка данных...</div>
+
+  <script>
+    const apiKey = "a9fc682c-589a-42cd-929c-5992148f1ea2";
+
+    async function loadData(tokenSymbol, start, end) {
+      // Long/Short Ratio
+      const lsrUrl = `https://api.coinalyze.net/v1/long-short-ratio-history?symbols=${tokenSymbol}&interval=daily&from=${start}&to=${end}&api_key=${apiKey}`;
+      const lsrRes = await fetch(lsrUrl);
+      const lsrJson = await lsrRes.json();
+      const lsrData = lsrJson[0]?.history || [];
+
+      // Цена (Coinalyze OHLCV)
+      const priceSymbol = tokenSymbol.split("USDT")[0] + "USDT";
+      const priceUrl = `https://api.coinalyze.net/v1/ohlcv/history?symbols=${priceSymbol}&interval=daily&from=${start}&to=${end}&api_key=${apiKey}`;
+      const priceRes = await fetch(priceUrl);
+      const priceJson = await priceRes.json();
+      const priceData = priceJson[0]?.history || [];
+
+      return { lsrData, priceData };
+    }
+
+    function timestampYearRange(year) {
+      if (year === "all") return [0, Math.floor(Date.now() / 1000)];
+      const y = parseInt(year);
+      const start = Math.floor(new Date(y,0,1).getTime()/1000);
+      const end   = Math.floor(new Date(y+1,0,1).getTime()/1000);
+      return [start, end];
+    }
+
+    function getSignals(lsrData) {
+      return lsrData.map(x => {
+        if (x.r < 0.8) return "buy";
+        else if (x.r > 1.2) return "sell";
+        else return "neutral";
+      });
+    }
+
+    async function updateChart() {
+      const year = document.getElementById("yearSelect").value;
+      const tokenSymbol = document.getElementById("tokenSelect").value;
+      const [start, end] = timestampYearRange(year);
+      const { lsrData, priceData } = await loadData(tokenSymbol, start, end);
+
+      const labels = lsrData.map(x => new Date(x.t * 1000).toISOString().split("T")[0]);
+      const ratios = lsrData.map(x => x.r);
+
+      const priceMap = {};
+      priceData.forEach(p => { priceMap[p.t] = p.c; });
+      const prices = lsrData.map(x => priceMap[x.t] || null);
+
+      const signals = getSignals(lsrData);
+
+      cryptoChart.data.labels = labels;
+      cryptoChart.data.datasets[0].data = prices;
+      cryptoChart.data.datasets[1].data = ratios;
+
+      cryptoChart.options.plugins.annotation.annotations = {};
+
+      // Зоны
+      let startIdx = null;
+      let type = null;
+      labels.forEach((label,i)=>{
+        if(signals[i]!==type){
+          if(startIdx!==null) addAnnotation(startIdx,i-1,type);
+          startIdx=i;
+          type=signals[i];
+        }
+      });
+      if(startIdx!==null) addAnnotation(startIdx,labels.length-1,type);
+
+      cryptoChart.update();
+
+      // Сигнал текущий
+      const lastSignal = signals[signals.length-1];
+      const signalDiv = document.getElementById("signalText");
+      if(lastSignal==="buy") signalDiv.innerHTML = `Сигнал для ${tokenSymbol}: <span style='color:green'>Покупать</span>`;
+      else if(lastSignal==="sell") signalDiv.innerHTML = `Сигнал для ${tokenSymbol}: <span style='color:red'>Продавать</span>`;
+      else signalDiv.innerHTML = `Сигнал для ${tokenSymbol}: <span style='color:gray'>Нейтрально</span>`;
+    }
+
+    function addAnnotation(startIdx,endIdx,type){
+      if(type==="neutral") return;
+      const color = type==="buy" ? "rgba(0,255,0,0.1)" : "rgba(255,0,0,0.1)";
+      cryptoChart.options.plugins.annotation.annotations[`zone_${startIdx}_${endIdx}`] = {
+        type:'box',
+        xMin:startIdx,
+        xMax:endIdx,
+        yMin:0,
+        yMax:'max',
+        backgroundColor: color
+      };
+    }
+
+    const ctx = document.getElementById("cryptoChart").getContext("2d");
+    const cryptoChart = new Chart(ctx,{
+      type:'line',
+      data:{
+        labels:[],
+        datasets:[
+          {label:"Цена", yAxisID:'yPrice', borderColor:'orange', data:[], fill:false, tension:0.1},
+          {label:"Long/Short Ratio", yAxisID:'yRatio', borderColor:'blue', data:[], fill:false, tension:0.1}
+        ]
+      },
+      options:{
+        responsive:true,
+        interaction:{mode:'index', intersect:false},
+        plugins:{annotation:{}},
+        scales:{
+          yPrice:{type:'linear', position:'left', title:{display:true,text:'Цена (USD)'}},
+          yRatio:{type:'linear', position:'right', title:{display:true,text:'Long/Short Ratio'}, min:0, max:2}
+        }
+      },
+      plugins:[ChartAnnotation.Annotation]
+    });
+
+    document.getElementById("yearSelect").addEventListener("change",updateChart);
+    document.getElementById("tokenSelect").addEventListener("change",updateChart);
+
+    updateChart();
+  </script>
+
+</body>
+</html>
