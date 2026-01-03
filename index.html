@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>Crypto Dashboard Stable (CMC + Simulated L/S)</title>
+<title>Crypto Dashboard Stable (CMC + Realistic Simulated L/S)</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.3.1/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
@@ -16,7 +16,7 @@ select { padding: 5px; font-size: 14px; margin-right: 15px; }
 </head>
 <body>
 
-<h1>Crypto Dashboard Stable (CMC + Simulated L/S)</h1>
+<h1>Crypto Dashboard (CMC + Realistic Simulated L/S)</h1>
 
 <div id="controls">
   <label>Год: </label>
@@ -53,8 +53,8 @@ select { padding: 5px; font-size: 14px; margin-right: 15px; }
 
 <script>
 const cmcApiKey = "51da7c3d5e65400280a71b307a9f7ee2";
+const cmcIds = {BTC:1, ETH:1027, ATOM:3794, UNION:2666, TIA:1297};
 
-// Диапазон дат по году
 function timestampYearRange(year){
   if(year==="all") return [new Date(2016,0,1), new Date()];
   const y=parseInt(year);
@@ -67,8 +67,7 @@ async function loadCMCData(symbol, year){
     const [startDate,endDate] = timestampYearRange(year);
     const start = Math.floor(startDate.getTime()/1000);
     const end = Math.floor(endDate.getTime()/1000);
-    const ids = {BTC:"1", ETH:"1027", ATOM:"3794", UNION:"2666", TIA:"1297"};
-    const id = ids[symbol];
+    const id = cmcIds[symbol];
     const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/ohlcv/historical?id=${id}&convert=USD&time_start=${start}&time_end=${end}`;
     const res = await fetch(url,{headers:{"X-CMC_PRO_API_KEY": cmcApiKey,"Accept":"application/json"}});
     const data = await res.json();
@@ -81,14 +80,23 @@ async function loadCMCData(symbol, year){
   }
 }
 
-// Имитация L/S Ratio
+// Реалистичная имитация L/S Ratio (0.5–1.5)
 function simulateLS(prices){
-  const min = Math.min(...prices);
-  const max = Math.max(...prices);
-  return prices.map(p => 1 + ((p - min)/(max - min) - 0.5)); // 0.5–1.5
+  if(prices.length===0) return [];
+  const smaPeriod = Math.max(5, Math.floor(prices.length/20)); // SMA период ~5% длины
+  const sma = prices.map((p,i)=>{
+    if(i<smaPeriod) return null;
+    const sum = prices.slice(i-smaPeriod+1,i+1).reduce((a,b)=>a+b,0);
+    return sum/smaPeriod;
+  });
+  const ls = prices.map((p,i)=>{
+    if(sma[i]===null) return 1;
+    const ratio = 1 + (p-sma[i])/sma[i]; // отклонение от SMA
+    return Math.max(0.5, Math.min(1.5, ratio));
+  });
+  return ls;
 }
 
-// Сигналы по L/S
 function getSignals(lsData){
   return lsData.map(r=>{
     if(r<0.8) return 'buy';
@@ -97,7 +105,6 @@ function getSignals(lsData){
   });
 }
 
-// Цветные зоны
 function addAnnotations(labels, signals){
   const annotations = {};
   let startIdx=null, type=null;
@@ -117,7 +124,6 @@ function addAnnotations(labels, signals){
   return annotations;
 }
 
-// Точки входа/выхода
 function addEntryPoints(prices,signals){
   return signals.map((s,i)=>{
     if(s==='buy') return {x:i,y:prices[i],signal:'buy'};
@@ -126,7 +132,6 @@ function addEntryPoints(prices,signals){
   }).filter(p=>p!==null);
 }
 
-// Обновление графика
 async function updateChart(){
   document.getElementById("statusText").innerText = "";
   const year = document.getElementById("yearSelect").value;
@@ -154,13 +159,12 @@ async function updateChart(){
   else signalDiv.innerHTML = "Сигнал: <span style='color:gray'>Нейтрально</span>";
 }
 
-// Создание графика
 const ctx=document.getElementById("cryptoChart").getContext("2d");
 const cryptoChart = new Chart(ctx,{
   type:'line',
   data:{labels:[], datasets:[
     {label:"Цена (USD)", data:[], borderColor:'orange', fill:false, yAxisID:'yPrice'},
-    {label:"L/S Ratio (Simulation)", data:[], borderColor:'blue', fill:false, yAxisID:'yRatio'},
+    {label:"L/S Ratio (Simulated)", data:[], borderColor:'blue', fill:false, yAxisID:'yRatio'},
     {label:"Точки входа/выхода", data:[], borderColor:'green', pointBackgroundColor:function(ctx){
       return ctx.raw.signal==='buy'?'green':'red';
     }, showLine:false, pointRadius:5, type:'scatter', yAxisID:'yPrice'}
