@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Crypto Dashboard</title>
+  <title>Crypto Dashboard + Binance</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.3.1/dist/chartjs-plugin-annotation.min.js"></script>
   <style>
@@ -15,7 +15,7 @@
 </head>
 <body>
 
-<h1>Crypto Price + Long/Short Ratio</h1>
+<h1>Crypto Price + Long/Short Ratio (Coinalyze + Binance)</h1>
 
 <div id="controls">
   <label>Год: </label>
@@ -50,110 +50,114 @@
 <div class="signal" id="signalText">Загрузка данных...</div>
 
 <script>
-  // 🔑 Твой API ключ Coinalyze
-  const apiKey = "dc44c296-7623-414b-90e2-5b95586e5a2a";  
-  const corsProxy = "https://cors-anywhere.herokuapp.com/";
+const apiKey = "dc44c296-7623-414b-90e2-5b95586e5a2a";  
+const corsProxy = "https://cors-anywhere.herokuapp.com/";
 
-  async function loadData(tokenSymbol, start, end) {
-    const lsrUrl = `${corsProxy}https://api.coinalyze.net/v1/long-short-ratio-history?symbols=${tokenSymbol}&interval=daily&from=${start}&to=${end}&api_key=${apiKey}`;
-    const lsrRes = await fetch(lsrUrl);
-    const lsrJson = await lsrRes.json();
-    const lsrData = lsrJson[0]?.history || [];
+// Получаем Coinalyze Long/Short и Binance цену
+async function loadData(tokenSymbol, start, end) {
+  // Long/Short Coinalyze
+  const lsrUrl = `${corsProxy}https://api.coinalyze.net/v1/long-short-ratio-history?symbols=${tokenSymbol}&interval=daily&from=${start}&to=${end}&api_key=${apiKey}`;
+  const lsrRes = await fetch(lsrUrl);
+  const lsrJson = await lsrRes.json();
+  const lsrData = lsrJson[0]?.history || [];
 
-    const priceSymbol = tokenSymbol.split("USDT")[0]+"USDT";
-    const priceUrl = `${corsProxy}https://api.coinalyze.net/v1/ohlcv/history?symbols=${priceSymbol}&interval=daily&from=${start}&to=${end}&api_key=${apiKey}`;
-    const priceRes = await fetch(priceUrl);
-    const priceJson = await priceRes.json();
-    const priceData = priceJson[0]?.history || [];
+  // Binance цена (Klines)
+  const binSymbol = tokenSymbol.split("USDT")[0] + "USDT";
+  const binUrl = `${corsProxy}https://api.binance.com/api/v3/klines?symbol=${binSymbol}&interval=1d&limit=1500`;
+  const binRes = await fetch(binUrl);
+  const binJson = await binRes.json();
+  // преобразуем в {t, c}
+  const priceData = binJson.map(k => ({ t: Math.floor(k[0]/1000), c: parseFloat(k[4]) }));
 
-    return { lsrData, priceData };
-  }
+  return { lsrData, priceData };
+}
 
-  function timestampYearRange(year){
-    if(year==="all") return [0, Math.floor(Date.now()/1000)];
-    const y=parseInt(year);
-    const start=Math.floor(new Date(y,0,1).getTime()/1000);
-    const end=Math.floor(new Date(y+1,0,1).getTime()/1000);
-    return [start,end];
-  }
+function timestampYearRange(year){
+  if(year==="all") return [0, Math.floor(Date.now()/1000)];
+  const y=parseInt(year);
+  const start=Math.floor(new Date(y,0,1).getTime()/1000);
+  const end=Math.floor(new Date(y+1,0,1).getTime()/1000);
+  return [start,end];
+}
 
-  function getSignals(lsrData){
-    return lsrData.map(x=>{
-      if(x.r<0.8) return "buy";
-      else if(x.r>1.2) return "sell";
-      else return "neutral";
-    });
-  }
-
-  async function updateChart() {
-    const year=document.getElementById("yearSelect").value;
-    const tokenSymbol=document.getElementById("tokenSelect").value;
-    const [start,end]=timestampYearRange(year);
-    const { lsrData, priceData }=await loadData(tokenSymbol,start,end);
-
-    const labels = lsrData.map(x=>new Date(x.t*1000).toISOString().split("T")[0]);
-    const ratios = lsrData.map(x=>x.r);
-
-    const priceMap={};
-    priceData.forEach(p=>{priceMap[p.t]=p.c;});
-    const prices=lsrData.map(x=>priceMap[x.t]||null);
-
-    const signals=getSignals(lsrData);
-
-    cryptoChart.data.labels=labels;
-    cryptoChart.data.datasets[0].data=prices;
-    cryptoChart.data.datasets[1].data=ratios;
-    cryptoChart.options.plugins.annotation.annotations={};
-
-    let startIdx=null; let type=null;
-    labels.forEach((label,i)=>{
-      if(signals[i]!==type){
-        if(startIdx!==null) addAnnotation(startIdx,i-1,type);
-        startIdx=i;
-        type=signals[i];
-      }
-    });
-    if(startIdx!==null) addAnnotation(startIdx,labels.length-1,type);
-
-    cryptoChart.update();
-
-    const lastSignal=signals[signals.length-1];
-    const signalDiv=document.getElementById("signalText");
-    if(lastSignal==="buy") signalDiv.innerHTML=`Сигнал для ${tokenSymbol}: <span style='color:green'>Покупать</span>`;
-    else if(lastSignal==="sell") signalDiv.innerHTML=`Сигнал для ${tokenSymbol}: <span style='color:red'>Продавать</span>`;
-    else signalDiv.innerHTML=`Сигнал для ${tokenSymbol}: <span style='color:gray'>Нейтрально</span>`;
-  }
-
-  function addAnnotation(startIdx,endIdx,type){
-    if(type==="neutral") return;
-    const color=type==="buy"?"rgba(0,255,0,0.1)":"rgba(255,0,0,0.1)";
-    cryptoChart.options.plugins.annotation.annotations[`zone_${startIdx}_${endIdx}`]={
-      type:'box', xMin:startIdx, xMax:endIdx, yMin:0, yMax:'max', backgroundColor: color
-    };
-  }
-
-  const ctx=document.getElementById("cryptoChart").getContext("2d");
-  const cryptoChart=new Chart(ctx,{
-    type:'line',
-    data:{labels:[], datasets:[
-      {label:"Цена", yAxisID:'yPrice', borderColor:'orange', data:[], fill:false, tension:0.1},
-      {label:"Long/Short Ratio", yAxisID:'yRatio', borderColor:'blue', data:[], fill:false, tension:0.1}
-    ]},
-    options:{
-      responsive:true,
-      interaction:{mode:'index', intersect:false},
-      plugins:{annotation:{}},
-      scales:{
-        yPrice:{type:'linear', position:'left', title:{display:true,text:'Цена (USD)'}},
-        yRatio:{type:'linear', position:'right', title:{display:true,text:'Long/Short Ratio'}, min:0, max:2}
-      }
-    },
-    plugins:[ChartAnnotation.Annotation]
+function getSignals(lsrData){
+  return lsrData.map(x=>{
+    if(x.r<0.8) return "buy";
+    else if(x.r>1.2) return "sell";
+    else return "neutral";
   });
+}
 
-  document.getElementById("yearSelect").addEventListener("change",updateChart);
-  document.getElementById("tokenSelect").addEventListener("change",updateChart);
-  updateChart();
+async function updateChart() {
+  const year=document.getElementById("yearSelect").value;
+  const tokenSymbol=document.getElementById("tokenSelect").value;
+  const [start,end]=timestampYearRange(year);
+  const { lsrData, priceData }=await loadData(tokenSymbol,start,end);
+
+  const labels = lsrData.map(x=>new Date(x.t*1000).toISOString().split("T")[0]);
+  const ratios = lsrData.map(x=>x.r);
+
+  // сопоставляем цены Binance по времени
+  const priceMap = {};
+  priceData.forEach(p=>{priceMap[p.t]=p.c;});
+  const prices = lsrData.map(x=>priceMap[x.t]||null);
+
+  const signals = getSignals(lsrData);
+
+  cryptoChart.data.labels = labels;
+  cryptoChart.data.datasets[0].data = prices; // Binance price
+  cryptoChart.data.datasets[1].data = ratios; // Coinalyze L/S
+  cryptoChart.options.plugins.annotation.annotations = {};
+
+  let startIdx=null; let type=null;
+  labels.forEach((label,i)=>{
+    if(signals[i]!==type){
+      if(startIdx!==null) addAnnotation(startIdx,i-1,type);
+      startIdx=i;
+      type=signals[i];
+    }
+  });
+  if(startIdx!==null) addAnnotation(startIdx,labels.length-1,type);
+
+  cryptoChart.update();
+
+  const lastSignal = signals[signals.length-1];
+  const signalDiv = document.getElementById("signalText");
+  if(lastSignal==="buy") signalDiv.innerHTML=`Сигнал для ${tokenSymbol}: <span style='color:green'>Покупать</span>`;
+  else if(lastSignal==="sell") signalDiv.innerHTML=`Сигнал для ${tokenSymbol}: <span style='color:red'>Продавать</span>`;
+  else signalDiv.innerHTML=`Сигнал для ${tokenSymbol}: <span style='color:gray'>Нейтрально</span>`;
+}
+
+function addAnnotation(startIdx,endIdx,type){
+  if(type==="neutral") return;
+  const color = type==="buy"?"rgba(0,255,0,0.1)":"rgba(255,0,0,0.1)";
+  cryptoChart.options.plugins.annotation.annotations[`zone_${startIdx}_${endIdx}`]={
+    type:'box', xMin:startIdx, xMax:endIdx, yMin:0, yMax:'max', backgroundColor: color
+  };
+}
+
+const ctx = document.getElementById("cryptoChart").getContext("2d");
+const cryptoChart = new Chart(ctx,{
+  type:'line',
+  data:{labels:[], datasets:[
+    {label:"Цена Binance", yAxisID:'yPrice', borderColor:'orange', data:[], fill:false, tension:0.1},
+    {label:"Long/Short Ratio", yAxisID:'yRatio', borderColor:'blue', data:[], fill:false, tension:0.1}
+  ]},
+  options:{
+    responsive:true,
+    interaction:{mode:'index', intersect:false},
+    plugins:{annotation:{}},
+    scales:{
+      yPrice:{type:'linear', position:'left', title:{display:true,text:'Цена (USD)'}},
+      yRatio:{type:'linear', position:'right', title:{display:true,text:'Long/Short Ratio'}, min:0, max:2}
+    }
+  },
+  plugins:[ChartAnnotation.Annotation]
+});
+
+document.getElementById("yearSelect").addEventListener("change",updateChart);
+document.getElementById("tokenSelect").addEventListener("change",updateChart);
+updateChart();
 </script>
 
 </body>
